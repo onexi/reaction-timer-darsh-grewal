@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reaction Timer Game</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      /* Added background image for a cartoony road scene */
+      background: url('https://i.fbcd.co/products/resized/resized-750-500/541ad61cc78fb95b0b505d8419f0a62e1bc7aba45bc7572944f4336832bb094e.jpg') no-repeat center center fixed;
+      background-size: cover;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: start;
+      min-height: 100vh;
+      margin: 0;
+      padding: 20px;
+    }
+    /* Make the button bigger */
+    #game-button {
+      font-size: 1.5rem;
+      padding: 1rem 2rem;
+      margin-top: 1rem;
+      cursor: pointer;
+    }
+    .traffic-light {
+      width: 100px;
+      margin: 20px auto;
+    }
+    .light {
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+      margin: 10px auto;
+      background-color: gray;
+    }
+    .red {
+      background-color: red;
+    }
+    .green {
+      background-color: green;
+    }
+    .container {
+      display: flex;
+      gap: 40px;
+      margin-top: 1rem;
+    }
+    .leaderboard, .shaming {
+      background-color: #fff;
+      padding: 1rem;
+      border-radius: 6px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    /* Optional: style the input so it's visible at all times */
+    #name {
+      font-size: 1rem;
+      padding: 0.5rem;
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body onload="init()">
+  <h1>Reaction Timer Game</h1>
+
+  <!-- A single button that changes text depending on game state -->
+  <button id="game-button" onclick="handleClick()">Ready</button>
+
+  <div class="traffic-light">
+    <div id="red-light" class="light red"></div>
+    <div id="green-light" class="light"></div>
+  </div>
+
+  <!-- Reaction time display -->
+  <p id="reaction-time"></p>
+
+  <div class="container">
+    <div class="leaderboard">
+      <h2>Leaderboard (Top 10)</h2>
+      <ul id="leaderboard-list"></ul>
+    </div>
+    <div class="shaming">
+      <h2>Public Shaming</h2>
+      <ul id="public-shaming-list"></ul>
+    </div>
+  </div>
+
+  <script>
+    // Possible states: "start", "waiting", "green"
+    let currentState = "start";
+    let startTime;
+    let gameTimeout;
+
+    // On page load, fetch existing data from the server (leaderboard + shaming)
+    function init() {
+      fetch("/get_data", { method: "GET" })
+        .then((res) => res.json())
+        .then((data) => {
+          updateLeaderboard(data.leaderboard);
+          updatePublicShaming(data.public_shaming);
+        })
+        .catch((err) => {
+          console.error("Failed to load existing data", err);
+        });
+    }
+
+    // Called by the single button in the HTML
+    function handleClick() {
+      if (currentState === "start") {
+        // User clicks "Ready"
+        startGame();
+      } else if (currentState === "waiting") {
+        // If they click while we're waiting for green, that's too early
+        const name = document.getElementById("name")?.value || "";
+        tooEarly(name);
+      } else if (currentState === "green") {
+        // If it's green and they click, record reaction
+        handleReaction();
+      }
+    }
+
+    // Begin the game, request random delay from server
+    function startGame() {
+      // Check for name input
+      let nameInput = document.getElementById("name");
+      // If there's no input element, create one so the user can type in their name.
+      if (!nameInput) {
+        nameInput = document.createElement("input");
+        nameInput.type = "text";
+        nameInput.id = "name";
+        nameInput.placeholder = "Enter your name";
+        // Insert it above the game button
+        document.body.insertBefore(nameInput, document.getElementById("game-button"));
+      }
+
+      // If user hasn't typed a name, alert
+      if (!nameInput.value) {
+        alert("Please enter your name.");
+        return;
+      }
+
+      // Reset visuals / times
+      document.getElementById("reaction-time").innerText = "";
+      document.getElementById("red-light").classList.add("red");
+      document.getElementById("green-light").classList.remove("green");
+      clearTimeout(gameTimeout);
+
+      // Switch state to waiting, button to say "Wait..."
+      currentState = "waiting";
+      const button = document.getElementById("game-button");
+      button.textContent = "Wait...";
+
+      // Request the random delay from the server
+      fetch("/start_game", { method: "POST" })
+        .then(response => response.json())
+        .then(data => {
+          const delay = data.delay;
+          // After delay, turn green and set state
+          gameTimeout = setTimeout(() => {
+            document.getElementById("red-light").classList.remove("red");
+            document.getElementById("green-light").classList.add("green");
+
+            currentState = "green";
+            button.textContent = "It's Green!";
+
+            startTime = Date.now();
+          }, delay * 1000);
+        });
+    }
+
+    // If user clicks too early
+    function tooEarly(name) {
+      if (!name) {
+        alert("You clicked too early, but we don't even know your name!");
+        return;
+      }
+      fetch("/too_early", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name })
+      })
+        .then(response => response.json())
+        .then(data => {
+          updatePublicShaming(data.public_shaming);
+          alert("TOO EARLY! 🚔");
+        })
+        .catch(err => console.error("Shaming update failed", err));
+
+      // Reset state back to start
+      currentState = "start";
+      document.getElementById("game-button").textContent = "Ready";
+    }
+
+    // If user clicks when it's green, record reaction
+    function handleReaction() {
+      const reactionTime = Date.now() - startTime;
+      document.getElementById("reaction-time").innerText = `Reaction Time: ${reactionTime}ms`;
+
+      const name = document.getElementById("name").value;
+      fetch("/record_time", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, reaction_time: reactionTime })
+      })
+        .then(response => response.json())
+        .then(data => {
+          updateLeaderboard(data.leaderboard);
+        })
+        .catch(err => console.error("Leaderboard update failed", err));
+
+      // Reset state back to start
+      currentState = "start";
+      document.getElementById("game-button").textContent = "Ready";
+    }
+
+    // Update leaderboard display
+    function updateLeaderboard(leaderboard) {
+      const list = document.getElementById("leaderboard-list");
+      list.innerHTML = "";
+      leaderboard.forEach(entry => {
+        const li = document.createElement("li");
+        li.innerText = `${entry.name}: ${entry.reaction_time}ms`;
+        list.appendChild(li);
+      });
+    }
+
+    // Update public shaming display
+    function updatePublicShaming(shamingList) {
+      const list = document.getElementById("public-shaming-list");
+      list.innerHTML = "";
+      shamingList.forEach(name => {
+        const li = document.createElement("li");
+        li.innerText = name;
+        list.appendChild(li);
+      });
+    }
+  </script>
+</body>
+</html>
